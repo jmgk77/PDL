@@ -120,7 +120,7 @@ int main(int argc, char **argv) {
 
   // process
   int new_malware_size =
-      PDL.proxify_dll(malware_ptr, input_ptr, (verbose ? PDL_FLAG_VERBOSE : 0));
+      PDL.proxify_dll(malware_ptr, input_ptr, "XXXXXXXX", (verbose ? PDL_FLAG_VERBOSE : 0));
 
   //check success
   if (new_malware_size == 0) {
@@ -131,6 +131,9 @@ int main(int argc, char **argv) {
   // close maps
   discart_file_memory_map(input_ptr);
   write_file_memory_map(output, malware_ptr, new_malware_size);
+
+  //
+  printf("Rename %s to XXXXXXXX.DLL and %s to %s\n",input,output,input);
 
   printf("success!\n");
   exit(EXIT_SUCCESS);
