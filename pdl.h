@@ -290,6 +290,70 @@ private:
     return false;
   }
 
+  void create_export_data(PIMAGE_DOS_HEADER map, int RVA, const char *newdll) {
+    //###
+    BYTE *ptr = (BYTE *)rva2raw(map, RVA);
+    int rva = RVA;
+    //init IMAGE_EXPORT_DIRECTORY
+    PIMAGE_EXPORT_DIRECTORY export_table = (PIMAGE_EXPORT_DIRECTORY)ptr;
+    memset(ptr, 0, sizeof(IMAGE_EXPORT_DIRECTORY));
+    //copy name & base
+    export_table->Base = dllbase;
+    export_table->Name = rva + sizeof(IMAGE_EXPORT_DIRECTORY);
+    ptr += sizeof(IMAGE_EXPORT_DIRECTORY);
+    strcpy((char *)ptr, dllname);
+    ptr += strlen(dllname) + 1;
+    rva += sizeof(IMAGE_EXPORT_DIRECTORY) + strlen(dllname) + 1;
+    //
+    export_table->NumberOfFunctions = export_list.size();
+    export_table->AddressOfFunctions = rva;
+    export_table->AddressOfNames = rva + export_list.size() * sizeof(DWORD);
+    export_table->AddressOfNameOrdinals =
+        rva + export_list.size() * (sizeof(DWORD) + sizeof(WORD));
+    //
+    DWORD *fn_ptr = (DWORD *)ptr;
+    DWORD *n_ptr = fn_ptr + (export_list.size() * sizeof(DWORD));
+    WORD *o_ptr = (WORD *)n_ptr + (export_list.size() * sizeof(DWORD));
+    char *list_ptr = (char *)o_ptr + (export_list.size() * sizeof(WORD));
+    int list_rva = rva + (export_list.size() *
+                          (sizeof(DWORD) + sizeof(DWORD) + sizeof(WORD)));
+    //
+    for (auto it = begin(export_list); it != end(export_list); ++it) {
+      *fn_ptr = it->address;
+      *o_ptr = it->ordinal;
+      if ((it->name).empty()) {
+        if (it->type == EXPORT_LOCAL) {
+          strcpy(list_ptr, (it->name).c_str());
+          list_ptr += (it->name).length() + 1;
+          *n_ptr = list_rva;
+          list_rva += (it->name).length() + 1;
+        } else {
+          if (it->type == EXPORT_FORWARD) {
+            strcpy(list_ptr, newdll);
+            list_ptr += strlen(newdll);
+            *list_ptr++ = '.';
+            *fn_ptr = list_rva;
+            list_rva += strlen(newdll) + 1;
+
+            strcpy(list_ptr, (it->name).c_str());
+            list_ptr += (it->name).length() + 1;
+            *n_ptr = list_rva;
+            list_rva += (it->name).length() + 1;
+          } else {
+            //already forwarded
+            //###
+          }
+
+          export_table->NumberOfNames++;
+        }
+        fn_ptr++;
+        n_ptr++;
+        o_ptr++;
+      }
+      //###
+    }
+  }
+
 public:
   //
   int proxify_dll(void *fake_dll, void *original_dll, const char *newdll,
