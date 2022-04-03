@@ -11,27 +11,12 @@
 //
 // (c) jmgk 2022
 
-#include <ctype.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdio>
 #include <unistd.h>
 
 #include "pdl.h"
 
 #define MAP_SIZE (16 * 1024 * 1024)
-
-//
-//
-//   `7MM"""YMM `7MMF'`7MMF'      `7MM"""YMM      `7MMM.     ,MMF'      db      `7MM"""Mq.
-//     MM    `7   MM    MM          MM    `7        MMMb    dPMM       ;MM:       MM   `MM.
-//     MM   d     MM    MM          MM   d          M YM   ,M MM      ,V^MM.      MM   ,M9
-//     MM""MM     MM    MM          MMmmMM          M  Mb  M' MM     ,M  `MM      MMmmdM9
-//     MM   Y     MM    MM      ,   MM   Y  ,       M  YM.P'  MM     AbmmmqMA     MM
-//     MM         MM    MM     ,M   MM     ,M       M  `YM'   MM    A'     VML    MM
-//   .JMML.     .JMML..JMMmmmmMMM .JMMmmmmMMM     .JML. `'  .JMML..AMA.   .AMMA..JMML.
-//
-//
 
 void *create_file_memory_map(char *file, int add_size) {
   FILE *fp1;
@@ -67,22 +52,10 @@ void write_file_memory_map(char *file, void *ptr, int size) {
   free(ptr);
 }
 
-//
-//
-//   `7MMM.     ,MMF'      db      `7MMF'`7MN.   `7MF'
-//     MMMb    dPMM       ;MM:       MM    MMN.    M
-//     M YM   ,M MM      ,V^MM.      MM    M YMb   M
-//     M  Mb  M' MM     ,M  `MM      MM    M  `MN. M
-//     M  YM.P'  MM     AbmmmqMA     MM    M   `MM.M
-//     M  `YM'   MM    A'     VML    MM    M     YMM
-//   .JML. `'  .JMML..AMA.   .AMMA..JMML..JML.    YM
-//
-//
-
 int main(int argc, char **argv) {
   printf("Proxify DLL\nJMGK (c) 2022\n");
 
-  bool debug = false;
+  bool verbose = false;
   char *input = NULL;
   char *output = NULL;
   char *malware = NULL;
@@ -92,7 +65,7 @@ int main(int argc, char **argv) {
   while ((c = getopt(argc, argv, "vi:o:m:")) != -1)
     switch (c) {
     case 'v':
-      debug = true;
+      verbose = true;
       break;
     case 'i':
       input = optarg;
@@ -113,7 +86,7 @@ int main(int argc, char **argv) {
   }
 
   // info
-  if (debug) {
+  if (verbose) {
     printf("* INPUT DLL: %s\n", input);
     printf("* OUTPUT DLL: %s\n", output);
     printf("* MALWARE DLL: %s\n", malware);
@@ -147,7 +120,7 @@ int main(int argc, char **argv) {
 
   // process
   int new_malware_size =
-      proxify_dll(malware_ptr, input_ptr, (debug ? PDL_FLAG_DEBUG : 0));
+      proxify_dll(malware_ptr, input_ptr, (verbose ? PDL_FLAG_VERBOSE : 0));
 
   //check success
   if (new_malware_size == 0) {
