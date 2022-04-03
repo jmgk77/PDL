@@ -14,9 +14,13 @@
 #pragma once
 
 #include <cstdio>
+#include <string>
+#include <vector>
 
 #include <windows.h>
 #include <winnt.h>
+
+using namespace std;
 
 #define PDL_FLAG_VERBOSE 1
 
@@ -30,8 +34,22 @@
   printf(__VA_ARGS__);                                                         \
   return 0;
 
+#define EXPORT_FORWARD 1
+#define EXPORT_ALREADY_FORWARDED 1 << 1
+#define EXPORT_LOCAL 1 << 2
+
+struct export_list_item {
+  int type;
+  WORD ordinal;
+  DWORD address;
+  string name;
+};
+
 class pdl {
 private:
+  char *dllname;
+  vector<export_list_item> export_list;
+
   //
   void *rva2raw(PIMAGE_DOS_HEADER map, int RVA) {
     PIMAGE_NT_HEADERS pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
@@ -51,14 +69,12 @@ private:
 
   //
   void dump_export_table(PIMAGE_DOS_HEADER map) {
-    PIMAGE_NT_HEADERS map_pe =
-        (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
+    PIMAGE_NT_HEADERS map_pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
 
     //parse export_tables
     PIMAGE_EXPORT_DIRECTORY export_table = (PIMAGE_EXPORT_DIRECTORY)rva2raw(
-        map,
-        map_pe->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
-            .VirtualAddress);
+        map, map_pe->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+                 .VirtualAddress);
 
     if (export_table) {
 
@@ -88,7 +104,7 @@ private:
         DWORD *function =
             (DWORD *)rva2raw(map, export_table->AddressOfFunctions);
         for (int c = 0; c < export_table->NumberOfFunctions; c++) {
-          PDL_DEBUG("\t%d\t%s\t(0x%x)\n", *ordinal++, rva2raw(map, *name),
+          PDL_DEBUG("\t%d\t%s\t(0x%x)\n", *ordinal++, rva2raw(map, *name++),
                     *function)
           //if *function is between export_table.VirtualAddress and
           //export_table.VirtualAddress + export_table.Size then is FORWARDED
@@ -103,8 +119,58 @@ private:
                                    .Size)) {
             PDL_DEBUG("\t\t\t\tFORWARDED\n")
           }
+          function++;
+        }
+      }
+    }
+  }
+
+  //
+  void process_export_table(PIMAGE_DOS_HEADER map, int flag) {
+    PIMAGE_NT_HEADERS map_pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
+
+    //parse export_tables
+    PIMAGE_EXPORT_DIRECTORY export_table = (PIMAGE_EXPORT_DIRECTORY)rva2raw(
+        map, map_pe->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+                 .VirtualAddress);
+
+    if (export_table) {
+      dllname = (char *)rva2raw(map, export_table->Name);
+
+      if (export_table->NumberOfFunctions) {
+        WORD *ordinal =
+            (WORD *)rva2raw(map, export_table->AddressOfNameOrdinals);
+        DWORD *name = (DWORD *)rva2raw(map, export_table->AddressOfNames);
+        DWORD *function =
+            (DWORD *)rva2raw(map, export_table->AddressOfFunctions);
+        for (int c = 0; c < export_table->NumberOfFunctions; c++) {
+
+          export_list_item exp;
+
+          exp.ordinal = *ordinal;
+          exp.address = (flag & EXPORT_LOCAL) ? *function : 0;
+          exp.name = string((char *)rva2raw(map, *name));
+
+          exp.type = flag;
+
+          if ((*function >= map_pe->OptionalHeader
+                                .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+                                .VirtualAddress) &&
+              (*function < map_pe->OptionalHeader
+                                   .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+                                   .VirtualAddress +
+                               map_pe->OptionalHeader
+                                   .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+                                   .Size)) {
+            exp.type = EXPORT_ALREADY_FORWARDED;
+            exp.address = -1;
+          }
+
+          ordinal++;
           name++;
           function++;
+
+          export_list.push_back(exp);
         }
       }
     }
@@ -141,8 +207,25 @@ public:
 
     PDL_INFO("! Images are valid...\n")
 
-    dump_export_table(input);
-    dump_export_table(output);
+    //process output exports
+    process_export_table(output, EXPORT_LOCAL);
+    //process input exports
+    process_export_table(input, EXPORT_FORWARD);
+
+    PDL_INFO("! Exports found:\n")
+    for (auto it = begin(export_list); it != end(export_list); ++it) {
+      PDL_INFO("0x%02x\t%s (0x%08x)\t%s\n", it->ordinal, (it->name).c_str(),
+               it->address,
+               (it->type & EXPORT_LOCAL)
+                   ? "LOCAL"
+                   : (it->type & EXPORT_FORWARD) ? "FORWARD" : "ALREADY");
+    }
+
+    //###calc size
+    //###create section in output
+    //###rebuild exports
+
+    //dump_export_table(output);
 
     //###
     //###
