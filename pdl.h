@@ -132,6 +132,7 @@ private:
 
   //
   void *reuse_export_section(PIMAGE_DOS_HEADER map, int newsize) {
+  bool create_export_section(PIMAGE_DOS_HEADER map, int newsize) {
     PIMAGE_NT_HEADERS map_pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
 
     int export_RVA =
