@@ -120,7 +120,7 @@ int main(int argc, char **argv) {
 
   // process
   int new_malware_size =
-      proxify_dll(malware_ptr, input_ptr, (verbose ? PDL_FLAG_VERBOSE : 0));
+      PDL.proxify_dll(malware_ptr, input_ptr, (verbose ? PDL_FLAG_VERBOSE : 0));
 
   //check success
   if (new_malware_size == 0) {
