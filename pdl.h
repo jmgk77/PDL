@@ -49,6 +49,7 @@ class pdl {
 private:
   int flags;
   char *dllname;
+  int dllbase;
   vector<export_list_item> export_list;
 
   //
@@ -56,11 +57,14 @@ private:
     PIMAGE_NT_HEADERS pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
     PIMAGE_SECTION_HEADER section_table =
         (PIMAGE_SECTION_HEADER)((BYTE *)pe + sizeof(IMAGE_NT_HEADERS));
+    //for each section...
     for (int section = 0; section < pe->FileHeader.NumberOfSections;
          section++) {
       int start = section_table[section].VirtualAddress;
+      //RVA inside it?
       if ((RVA >= start) &&
           (RVA <= start + section_table[section].SizeOfRawData)) {
+        //return phys
         return (void *)((RVA - start) +
                         section_table[section].PointerToRawData + (BYTE *)map);
       }
@@ -179,9 +183,12 @@ private:
                  .VirtualAddress);
 
     if (export_table) {
+      //save name & base
       dllname = (char *)rva2raw(map, export_table->Name);
+      dllbase = export_table->Base;
 
       if (export_table->NumberOfFunctions) {
+        //3 tables
         WORD *ordinal =
             (WORD *)rva2raw(map, export_table->AddressOfNameOrdinals);
         DWORD *name = (DWORD *)rva2raw(map, export_table->AddressOfNames);
