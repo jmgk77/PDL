@@ -13,51 +13,23 @@
 
 #pragma once
 
-#include <ctype.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
+#include <cstdio>
 
 #include <windows.h>
 #include <winnt.h>
 
-#define PDL_FLAG_DEBUG 1
+#define PDL_FLAG_VERBOSE 1
 
-#define PDL_DEBUG(...)                                                         \
-  if (flags & PDL_FLAG_DEBUG)                                                  \
+#define DBG_BRK asm("int $3");
+
+#define PDL_INFO(...)                                                          \
+  if (flags & PDL_FLAG_VERBOSE)                                                \
     printf(__VA_ARGS__);
+#define PDL_DEBUG(...) printf(__VA_ARGS__);
 #define PDL_ERROR(...)                                                         \
   printf(__VA_ARGS__);                                                         \
   return 0;
 
-//
-//
-//     .g8"""bgd `7MMF'        .g8""8q. `7MM"""Yp,      db      `7MMF'       .M"""bgd
-//   .dP'     `M   MM        .dP'    `YM. MM    Yb     ;MM:       MM        ,MI    "Y
-//   dM'       `   MM        dM'      `MM MM    dP    ,V^MM.      MM        `MMb.
-//   MM            MM        MM        MM MM"""bg.   ,M  `MM      MM          `YMMNq.
-//   MM.    `7MMF' MM      , MM.      ,MP MM    `Y   AbmmmqMA     MM      , .     `MM
-//   `Mb.     MM   MM     ,M `Mb.    ,dP' MM    ,9  A'     VML    MM     ,M Mb     dM
-//     `"bmmmdPY .JMMmmmmMMM   `"bmmd"' .JMMmmmd9 .AMA.   .AMMA..JMMmmmmMMM P"Ybmmd"
-//
-//
-int flags;
-PIMAGE_DOS_HEADER output;
-PIMAGE_DOS_HEADER input;
-PIMAGE_NT_HEADERS output_pe;
-PIMAGE_NT_HEADERS input_pe;
-
-//
-//
-//   `7MM"""Mq.`7MMF'   `7MF' db               `7MM"""Mq.        db `7MMF'     A     `7MF'
-//     MM   `MM. `MA     ,V  ;MM:                MM   `MM.      ;MM:  `MA     ,MA     ,V
-//     MM   ,M9   VM:   ,V  ,V^MM.     pd*"*b.   MM   ,M9      ,V^MM.  VM:   ,VVM:   ,V
-//     MMmmdM9     MM.  M' ,M  `MM    (O)   j8   MMmmdM9      ,M  `MM   MM.  M' MM.  M'
-//     MM  YM.     `MM A'  AbmmmqMA       ,;j9   MM  YM.      AbmmmqMA  `MM A'  `MM A'
-//     MM   `Mb.    :MM;  A'     VML   ,-='      MM   `Mb.   A'     VML  :MM;    :MM;
-//   .JMML. .JMM.    VF .AMA.   .AMMA.Ammmmmmm .JMML. .JMM..AMA.   .AMMA. VF      VF
-//
 //
 void *pdl_rva2raw(PIMAGE_DOS_HEADER map, int RVA) {
   PIMAGE_NT_HEADERS pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
@@ -65,58 +37,108 @@ void *pdl_rva2raw(PIMAGE_DOS_HEADER map, int RVA) {
       (PIMAGE_SECTION_HEADER)((BYTE *)pe + sizeof(IMAGE_NT_HEADERS));
   for (int section = 0; section < pe->FileHeader.NumberOfSections; section++) {
     int start = section_table[section].VirtualAddress;
-    int end = start + section_table[section].VirtualAddress;
-    if ((RVA >= start) && (RVA <= end)) {
-      PDL_DEBUG("(RVA2RAW) 0x%x => 0x%x\n", RVA,
-                (RVA - start) + section_table[section].PointerToRawData)
-      return (RVA - start) + section_table[section].PointerToRawData + map;
+    if ((RVA >= start) &&
+        (RVA <= start + section_table[section].SizeOfRawData)) {
+      return (void *)((RVA - start) + section_table[section].PointerToRawData +
+                      (BYTE *)map);
     }
   }
   return 0;
 }
 
 //
-//                                            ,,      ,...                 ,,    ,,    ,,     ....
-//                                            db    .d' ""               `7MM  `7MM  `7MM   pd'  `bq
-//                                                  dM`                    MM    MM    MM  6P      YA
-//     `7MMpdMAo.`7Mb,od8 ,pW"Wq.`7M'   `MF'`7MM   mMMmm`7M'   `MF'   ,M""bMM    MM    MM 6M'      `Mb
-//       MM   `Wb  MM' "'6W'   `Wb `VA ,V'    MM    MM    VA   ,V   ,AP    MM    MM    MM MN        8M
-//       MM    M8  MM    8M     M8   XMX      MM    MM     VA ,V    8MI    MM    MM    MM MN        8M
-//       MM   ,AP  MM    YA.   ,A9 ,V' VA.    MM    MM      VVV     `Mb    MM    MM    MM YM.      ,M9
-//       MMbmmd' .JMML.   `Ybmd9'.AM.   .MA..JMML..JMML.    ,V       `Wbmd"MML..JMML..JMML.Mb      dM
-//       MM                                                ,V                               Yq.  .pY
-//     .JMML.                                           OOb"    mmmmmmm                       ``''
-int proxify_dll(void *fake_dll, void *original_dll, int f) {
+void pdl_dump_export_table(PIMAGE_DOS_HEADER input) {
+  PIMAGE_NT_HEADERS input_pe =
+      (PIMAGE_NT_HEADERS)((BYTE *)input + input->e_lfanew);
 
-  flags = f;
+  //parse export_tables
+  PIMAGE_EXPORT_DIRECTORY export_table = (PIMAGE_EXPORT_DIRECTORY)pdl_rva2raw(
+      input,
+      input_pe->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+          .VirtualAddress);
 
-  PDL_DEBUG("! Processing...\n")
+  if (export_table) {
 
-  //check malware image
-  output = (PIMAGE_DOS_HEADER)fake_dll;
-  if (output->e_magic == IMAGE_DOS_SIGNATURE) {
-    output_pe = (PIMAGE_NT_HEADERS)((BYTE *)fake_dll + output->e_lfanew);
-    if (output_pe->Signature != IMAGE_NT_SIGNATURE) {
-      PDL_ERROR("! FAKEDLL not a PE image\n")
+    PDL_DEBUG("IMAGE_EXPORT_DIRECTORY\n");
+    PDL_DEBUG("\tDWORD Characteristics\t0x%x\n", export_table->Characteristics)
+    PDL_DEBUG("\tDWORD TimeDateStamp\t0x%x\n", export_table->TimeDateStamp)
+    PDL_DEBUG("\tWORD MajorVersion\t0x%x\n", export_table->MajorVersion)
+    PDL_DEBUG("\tWORD MinorVersion\t0x%x\n", export_table->MinorVersion)
+    PDL_DEBUG("\tDWORD Name\t0x%x (%s)\n", export_table->Name,
+              (char *)pdl_rva2raw(input, export_table->Name))
+    PDL_DEBUG("\tDWORD Base\t0x%x\n", export_table->Base)
+    PDL_DEBUG("\tDWORD NumberOfFunctions\t0x%x\n",
+              export_table->NumberOfFunctions)
+    PDL_DEBUG("\tDWORD NumberOfNames\t0x%x\n", export_table->NumberOfNames)
+    PDL_DEBUG("\tDWORD AddressOfFunctions\t0x%x\n",
+              export_table->AddressOfFunctions)
+    PDL_DEBUG("\tDWORD AddressOfNames\t0x%x\n", export_table->AddressOfNames)
+    PDL_DEBUG("\tDWORD AddressOfNameOrdinals\t0x%x\n",
+              export_table->AddressOfNameOrdinals)
+
+    if (export_table->NumberOfFunctions) {
+      PDL_DEBUG("export_tableS\n")
+      WORD *ordinal =
+          (WORD *)pdl_rva2raw(input, export_table->AddressOfNameOrdinals);
+      DWORD *name = (DWORD *)pdl_rva2raw(input, export_table->AddressOfNames);
+      DWORD *function =
+          (DWORD *)pdl_rva2raw(input, export_table->AddressOfFunctions);
+      for (int c = 0; c < export_table->NumberOfFunctions; c++) {
+        PDL_DEBUG("\t%d\t%s\t(0x%x)\n", *ordinal++, pdl_rva2raw(input, *name),
+                  *function)
+        //if *function is between export_table.VirtualAddress and
+        //export_table.VirtualAddress + export_table.Size then is FORWARDED
+        if ((*function >= input_pe->OptionalHeader
+                              .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+                              .VirtualAddress) &&
+            (*function < input_pe->OptionalHeader
+                                 .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+                                 .VirtualAddress +
+                             input_pe->OptionalHeader
+                                 .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
+                                 .Size)) {
+          PDL_DEBUG("\t\t\t\tFORWARDED\n")
+        }
+        name++;
+        function++;
+      }
     }
-  } else {
-    PDL_ERROR("! FAKEDLL not a MZ image\n")
   }
+}
 
-  //check original image
-  input = (PIMAGE_DOS_HEADER)original_dll;
+//
+bool pdl_check_pe(PIMAGE_DOS_HEADER input) {
   if (input->e_magic == IMAGE_DOS_SIGNATURE) {
-    input_pe = (PIMAGE_NT_HEADERS)((BYTE *)original_dll + input->e_lfanew);
-    if (input_pe->Signature != IMAGE_NT_SIGNATURE) {
-      PDL_ERROR("! ORIGINALDLL not a PE image\n")
+    PIMAGE_NT_HEADERS input_pe =
+        (PIMAGE_NT_HEADERS)((BYTE *)input + input->e_lfanew);
+    if (input_pe->Signature == IMAGE_NT_SIGNATURE) {
+      return true;
     }
-  } else {
-    PDL_ERROR("! ORIGINALDLL not a MZ image\n")
+  }
+  return false;
+}
+
+//
+int proxify_dll(void *fake_dll, void *original_dll, int flags) {
+  PDL_INFO("! Processing...\n")
+
+  PIMAGE_DOS_HEADER input = (PIMAGE_DOS_HEADER)original_dll;
+  PIMAGE_DOS_HEADER output = (PIMAGE_DOS_HEADER)fake_dll;
+
+  //check file images
+  if (!pdl_check_pe(output)) {
+    PDL_ERROR("! FAKEDLL not a valid file\n")
   }
 
-  PDL_DEBUG("! Images are valid...\n")
+  if (!pdl_check_pe(input)) {
+    PDL_ERROR("! ORIGINALDLL not a valid file\n")
+  }
 
-  //###
+  PDL_INFO("! Images are valid...\n")
+
+  pdl_dump_export_table(input);
+  pdl_dump_export_table(output);
+
   //###
   //###
 
