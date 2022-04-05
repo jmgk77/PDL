@@ -295,76 +295,106 @@ private:
     return false;
   }
 
-  void create_export_data(PIMAGE_DOS_HEADER map, int RVA, const char *newdll) {
-    //###
-    BYTE *ptr = (BYTE *)rva2raw(map, RVA);
-    int rva = RVA;
+  //!!!parse internal export data and create pe export info
+  void create_export_data(PIMAGE_DOS_HEADER map, int _RVA, const char *newdll) {
+    BYTE *ptr = (BYTE *)rva2raw(map, _RVA);
+    int rva = _RVA;
     //init IMAGE_EXPORT_DIRECTORY
     PIMAGE_EXPORT_DIRECTORY export_table = (PIMAGE_EXPORT_DIRECTORY)ptr;
     memset(ptr, 0, sizeof(IMAGE_EXPORT_DIRECTORY));
     //copy name & base
     export_table->Base = dllbase;
-    export_table->Name = rva + sizeof(IMAGE_EXPORT_DIRECTORY);
     ptr += sizeof(IMAGE_EXPORT_DIRECTORY);
+    rva += sizeof(IMAGE_EXPORT_DIRECTORY);
+    export_table->Name = rva;
     strcpy((char *)ptr, dllname);
-    ptr += strlen(dllname) + 1;
-    rva += sizeof(IMAGE_EXPORT_DIRECTORY) + strlen(dllname) + 1;
+    ptr += ALIGN(strlen(dllname) + 1, 4);
+    rva += ALIGN(strlen(dllname) + 1, 4);
+    //ptr and rva of 3 lists
+    DWORD *functions_ptr = (DWORD *)ptr;
+    int functions_rva = rva;
     //
+    DWORD *names_ptr =
+        (DWORD *)((BYTE *)functions_ptr + (export_list.size() * sizeof(DWORD)));
+    int names_rva = (functions_rva + (export_list.size() * sizeof(DWORD)));
+    //
+    WORD *ordinals_ptr =
+        (WORD *)((BYTE *)names_ptr + (export_list.size() * sizeof(DWORD)));
+    int ordinals_rva = (names_rva + (export_list.size() * sizeof(DWORD)));
+    //and names list area
+    char *list_ptr =
+        (char *)((BYTE *)ordinals_ptr + (export_list.size() * sizeof(WORD)));
+    int list_rva = (ordinals_rva + (export_list.size() * sizeof(WORD)));
+    //save to IMAGE_EXPORT_DIRECTORY
     export_table->NumberOfFunctions = export_list.size();
-    export_table->AddressOfFunctions = rva;
-    export_table->AddressOfNames = rva + export_list.size() * sizeof(DWORD);
-    export_table->AddressOfNameOrdinals =
-        rva + export_list.size() * (sizeof(DWORD) + sizeof(WORD));
-    //
-    DWORD *fn_ptr = (DWORD *)ptr;
-    DWORD *n_ptr = fn_ptr + (export_list.size() * sizeof(DWORD));
-    WORD *o_ptr = (WORD *)n_ptr + (export_list.size() * sizeof(DWORD));
-    char *list_ptr = (char *)o_ptr + (export_list.size() * sizeof(WORD));
-    int list_rva = rva + (export_list.size() *
-                          (sizeof(DWORD) + sizeof(DWORD) + sizeof(WORD)));
-    //
+    export_table->AddressOfFunctions = functions_rva;
+    export_table->AddressOfNames = names_rva;
+    export_table->AddressOfNameOrdinals = ordinals_rva;
+    //for each entry in internal struct...
     for (auto it = begin(export_list); it != end(export_list); ++it) {
-      *fn_ptr = it->address;
-      *o_ptr = it->ordinal;
-      if ((it->name).empty()) {
-        if (it->type == EXPORT_LOCAL) {
-          strcpy(list_ptr, (it->name).c_str());
-          list_ptr += (it->name).length() + 1;
-          *n_ptr = list_rva;
-          list_rva += (it->name).length() + 1;
-        } else {
-          if (it->type == EXPORT_FORWARD) {
-            strcpy(list_ptr, newdll);
-            list_ptr += strlen(newdll);
-            *list_ptr++ = '.';
-            *fn_ptr = list_rva;
-            list_rva += strlen(newdll) + 1;
-
-            strcpy(list_ptr, (it->name).c_str());
-            list_ptr += (it->name).length() + 1;
-            *n_ptr = list_rva;
-            list_rva += (it->name).length() + 1;
-          } else {
-            //already forwarded
-            //###
-          }
-
-          export_table->NumberOfNames++;
+      *functions_ptr = it->address;
+      *ordinals_ptr = it->ordinal;
+      if (!(it->name).empty()) {
+        if (it->type == EXPORT_FORWARD) {
+          //forwarded? copy dllname and set api to it
+          strcpy(list_ptr, newdll);
+          *functions_ptr = list_rva;
+          list_ptr += strlen(newdll);
+          *list_ptr++ = '.';
+          list_rva += strlen(newdll) + 1;
+          //and then copy name
         }
-        fn_ptr++;
-        n_ptr++;
-        o_ptr++;
+        if ((it->type == EXPORT_LOCAL) || (it->type == EXPORT_FORWARD)) {
+          //copy name (api already in place)
+          strcpy(list_ptr, (it->name).c_str());
+          *names_ptr = list_rva;
+          list_ptr += (it->name).length() + 1;
+          list_rva += (it->name).length() + 1;
+        }
+        if (it->type == EXPORT_ALREADY_FORWARDED) {
+          //already forwarded
+          strcpy(list_ptr, (it->name).c_str());
+          //point both api and name to string
+          *functions_ptr = list_rva;
+          *names_ptr = list_rva;
+          list_ptr += (it->name).length() + 1;
+          list_rva += (it->name).length() + 1;
+          //but adjust name to point after the dot
+          *names_ptr += (it->name).find('.') + 1;
+        }
+        export_table->NumberOfNames++;
       }
-      //###
+
+      //next item
+      functions_ptr++;
+      names_ptr++;
+      ordinals_ptr++;
     }
   }
 
 public:
-  //
-  int proxify_dll(void *fake_dll, void *original_dll, const char *newdll,
-                  int f) {
+  //proxify_dll()
+  //  params->
+  //    fake_dll     : mmap of our proxy dll
+  //    original_dll : mmap of dll to proxify
+  //    _dllname     : name of the dll to proxify (with ".DLL" ending)
+  //    _newdll      : name we will rename the proxified dll
+  //    __newsection : name of new section
+  //    f            : flags
+  //                      PDL_FLAG_VERBOSE  -> show debug info
+  //                      PDL_FLAG_REUSE    -> reuse existing export section
+  //                      PDL_FLAG_CREATE   -> create new export section
+  //  return->
+  //                 : new size, or 0 if error
+  int proxify_dll(void *fake_dll, void *original_dll, const char *_dllname,
+                  const char *_newdll, const char *_newsection, int f) {
     PDL_INFO("! Processing...\n")
     flags = f;
+
+    //###add ".DLL" to dllname if dont have, remove ".DLL" from newdll if have
+    dllname = _dllname;
+    newdll = _newdll;
+    newsection = _newsection;
 
     PIMAGE_DOS_HEADER input = (PIMAGE_DOS_HEADER)original_dll;
     PIMAGE_DOS_HEADER output = (PIMAGE_DOS_HEADER)fake_dll;
