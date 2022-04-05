@@ -372,13 +372,41 @@ private:
     }
   }
 
+  int calc_checksum(PIMAGE_DOS_HEADER map, int size) {
+    DWORD *base = (DWORD *)map;
+    unsigned long long checksum = 0;
+    unsigned long long limit = 0xFFFFFFFF;
+    limit++;
+    int checksum_offset =
+        (map->e_lfanew + sizeof(IMAGE_FILE_HEADER) + sizeof(DWORD) + 64) / 4;
+    //loop file
+    for (long long i = 0; i < (size / 4); i++) {
+      unsigned long dw = base[i];
+      //skip existing checksum
+      if (i != checksum_offset) {
+        //calculate checksum
+        checksum = (checksum & 0xffffffff) + dw + (checksum >> 32);
+        if (checksum > limit) {
+          checksum = (checksum & 0xffffffff) + (checksum >> 32);
+        }
+      }
+    }
+    //finish checksum
+    checksum = (checksum & 0xffff) + (checksum >> 16);
+    checksum = (checksum) + (checksum >> 16);
+    checksum = checksum & 0xffff;
+    checksum += size;
+    PDL_INFO("! Checksum: 0x%08x\n", checksum);
+    return checksum;
+  }
+
 public:
   //proxify_dll()
   //  params->
   //    fake_dll     : mmap of our proxy dll
   //    original_dll : mmap of dll to proxify
   //    _dllname     : name of the dll to proxify (with ".DLL" ending)
-  //    _newdll      : name we will rename the proxified dll
+  //    _newdll      : name we will rename the proxified dll (without ".DLL" ending)
   //    __newsection : name of new section
   //    f            : flags
   //                      PDL_FLAG_VERBOSE  -> show debug info
@@ -391,7 +419,7 @@ public:
     PDL_INFO("! Processing...\n")
     flags = f;
 
-    //###add ".DLL" to dllname if dont have, remove ".DLL" from newdll if have
+    //copy data
     dllname = _dllname;
     newdll = _newdll;
     newsection = _newsection;
@@ -466,17 +494,8 @@ public:
     size += section_table[pe->FileHeader.NumberOfSections - 1].SizeOfRawData;
     PDL_INFO("! Final DLL size: %d\n", size);
 
-    //###fix checksum
-    pe->OptionalHeader.CheckSum = 0;
-
-    ////////////////////////////////////////////
-    //###
-    FILE *fp1;
-    if ((fp1 = fopen("dump.dll", "wb")) != NULL) {
-      fwrite(output, 1, size, fp1);
-      fclose(fp1);
-    }
-    ////////////////////////////////////////////
+    //fix checksum
+    pe->OptionalHeader.CheckSum = calc_checksum(output, size);
 
     //return size;
     return 0;
