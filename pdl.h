@@ -23,6 +23,8 @@
 using namespace std;
 
 #define PDL_FLAG_VERBOSE 1
+#define PDL_FLAG_REUSE 1 << 1
+#define PDL_FLAG_CREATE 1 << 2
 
 #define DBG_BRK asm("int $3");
 
@@ -34,9 +36,12 @@ using namespace std;
   printf(__VA_ARGS__);                                                         \
   return 0;
 
+#define ALIGN(x, a) __ALIGN_MASK(x, (a)-1)
+#define __ALIGN_MASK(x, mask) (((x) + (mask)) & ~(mask))
+
 #define EXPORT_FORWARD 1
-#define EXPORT_ALREADY_FORWARDED 1 << 1
-#define EXPORT_LOCAL 1 << 2
+#define EXPORT_ALREADY_FORWARDED 2
+#define EXPORT_LOCAL 3
 
 struct export_list_item {
   int type;
@@ -48,11 +53,13 @@ struct export_list_item {
 class pdl {
 private:
   int flags;
-  char *dllname;
+  const char *dllname;
+  const char *newdll;
+  const char *newsection;
   int dllbase;
   vector<export_list_item> export_list;
 
-  //
+  //!!!convert a in-memory pointer to a file offset
   void *rva2raw(PIMAGE_DOS_HEADER map, int RVA) {
     PIMAGE_NT_HEADERS pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
     PIMAGE_SECTION_HEADER section_table =
@@ -72,7 +79,7 @@ private:
     return 0;
   }
 
-  //
+  //!!!dump info about export table (debug)
   void dump_export_table(PIMAGE_DOS_HEADER map) {
     PIMAGE_NT_HEADERS map_pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
 
@@ -130,7 +137,7 @@ private:
     }
   }
 
-  //
+  //!!!create a new section for exports
   bool create_export_section(PIMAGE_DOS_HEADER map, int newsize) {
     PIMAGE_NT_HEADERS map_pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
     PIMAGE_SECTION_HEADER section_table =
@@ -141,12 +148,13 @@ private:
           sizeof(IMAGE_SECTION_HEADER))) > section_table[0].PointerToRawData) {
       return false;
     }
-    //create new
+    //create new section
     int section = map_pe->FileHeader.NumberOfSections++;
-    memcpy(section_table[section].Name, "NEWSEC", sizeof("NEWSEC"));
+    memcpy(section_table[section].Name, newsection, strlen(newsection));
     section_table[section].VirtualAddress =
-        section_table[section - 1].VirtualAddress +
-        section_table[section - 1].Misc.VirtualSize;
+        ALIGN(section_table[section - 1].VirtualAddress +
+                  section_table[section - 1].Misc.VirtualSize,
+              map_pe->OptionalHeader.SectionAlignment);
     section_table[section].PointerToRawData =
         section_table[section - 1].PointerToRawData +
         section_table[section - 1].SizeOfRawData;
@@ -158,14 +166,8 @@ private:
                                              IMAGE_SCN_ALIGN_4BYTES +
                                              IMAGE_SCN_MEM_READ;
 
-    //align
-    int mask = map_pe->OptionalHeader.SectionAlignment - 1;
-    section_table[section].VirtualAddress =
-        section_table[section].VirtualAddress +
-        (-section_table[section].VirtualAddress & mask);
-
-    mask = map_pe->OptionalHeader.FileAlignment - 1;
-    section_table[section].SizeOfRawData = newsize + (-newsize & mask);
+    section_table[section].SizeOfRawData =
+        ALIGN(newsize, map_pe->OptionalHeader.FileAlignment);
 
     //export dir
     map_pe->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
@@ -174,12 +176,13 @@ private:
         newsize;
 
     //fix
-    map_pe->OptionalHeader.SizeOfInitializedData += newsize;
+    map_pe->OptionalHeader.SizeOfInitializedData +=
+        section_table[section].SizeOfRawData;
 
     return true;
   }
 
-  //
+  //!!!reuse existing export section
   bool reuse_export_section(PIMAGE_DOS_HEADER map, int newsize) {
     PIMAGE_NT_HEADERS map_pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
 
@@ -223,6 +226,7 @@ private:
     return false;
   }
 
+  //!!!convert export data to internal struct
   void process_export_table(PIMAGE_DOS_HEADER map, int flag) {
     PIMAGE_NT_HEADERS map_pe = (PIMAGE_NT_HEADERS)((BYTE *)map + map->e_lfanew);
 
@@ -233,7 +237,6 @@ private:
 
     if (export_table) {
       //save name & base
-      dllname = (char *)rva2raw(map, export_table->Name);
       dllbase = export_table->Base;
 
       if (export_table->NumberOfFunctions) {
@@ -265,6 +268,8 @@ private:
                                    .DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
                                    .Size)) {
             exp.type = EXPORT_ALREADY_FORWARDED;
+            char *fname = (char *)rva2raw(map, *function);
+            exp.name = string(fname);
             exp.address = -1;
           }
 
@@ -278,7 +283,7 @@ private:
     }
   }
 
-  //
+  //!!!check exe for validity
   bool check_pe(PIMAGE_DOS_HEADER map) {
     if (map->e_magic == IMAGE_DOS_SIGNATURE) {
       PIMAGE_NT_HEADERS map_pe =
@@ -394,22 +399,24 @@ public:
       }
       PDL_INFO("0x%02x\t%s (0x%08x)\t%s\n", it->ordinal, (it->name).c_str(),
                it->address,
-               (it->type & EXPORT_LOCAL)
+               (it->type == EXPORT_LOCAL)
                    ? "LOCAL"
-                   : (it->type & EXPORT_FORWARD) ? "FORWARD" : "ALREADY");
+                   : (it->type == EXPORT_FORWARD) ? "FORWARD" : "ALREADY");
     }
     PDL_INFO("! New export info size: %d\n", export_size);
 
     //reuse export section
     PDL_INFO("! Patching export data...\n")
-    //if (!reuse_export_section(output, export_size)) {
-    PDL_INFO("! Error! Creating new export data...\n")
-    //create new export section
-    if (!create_export_section(output, export_size)) {
-      PDL_ERROR("! Cant create new export data\n")
-      return 0;
+    if (!reuse_export_section(output, export_size) ||
+        (!(flags & PDL_FLAG_REUSE))) {
+      PDL_INFO("! Cant reuse export section! Creating new export section...\n")
+      //create new export section
+      if ((!create_export_section(output, export_size)) ||
+          (!(flags & PDL_FLAG_CREATE))) {
+        PDL_ERROR("! Cant create new export section... Error\n")
+        return 0;
+      }
     }
-    //}
 
     //rebuild exports
     PIMAGE_NT_HEADERS pe =
@@ -419,7 +426,7 @@ public:
             .VirtualAddress;
     create_export_data(output, export_RVA, newdll);
 
-    dump_export_table(output);
+    //dump_export_table(output);
 
     //calculate DLL size
     PIMAGE_SECTION_HEADER section_table =
@@ -429,7 +436,11 @@ public:
     size += section_table[pe->FileHeader.NumberOfSections - 1].SizeOfRawData;
     PDL_INFO("! Final DLL size: %d\n", size);
 
+    //###fix checksum
+    pe->OptionalHeader.CheckSum = 0;
+
     ////////////////////////////////////////////
+    //###
     FILE *fp1;
     if ((fp1 = fopen("dump.dll", "wb")) != NULL) {
       fwrite(output, 1, size, fp1);
