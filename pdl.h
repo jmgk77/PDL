@@ -17,6 +17,8 @@
 #include <string>
 #include <vector>
 
+#include <algorithm>
+
 #include <windows.h>
 #include <winnt.h>
 
@@ -48,6 +50,9 @@ struct export_list_item {
   WORD ordinal;
   DWORD address;
   string name;
+  bool operator<(const export_list_item &p) const {
+    return name < p.name; // order by name
+  }
 };
 
 class pdl {
@@ -56,7 +61,6 @@ private:
   const char *dllname;
   const char *newdll;
   const char *newsection;
-  int dllbase;
   vector<export_list_item> export_list;
 
   //!!!convert a in-memory pointer to a file offset
@@ -109,7 +113,7 @@ private:
                 export_table->AddressOfNameOrdinals)
 
       if (export_table->NumberOfFunctions) {
-        PDL_DEBUG("export_tableS\n")
+        PDL_DEBUG("export_tables\n")
         WORD *ordinal =
             (WORD *)rva2raw(map, export_table->AddressOfNameOrdinals);
         DWORD *name = (DWORD *)rva2raw(map, export_table->AddressOfNames);
@@ -217,8 +221,8 @@ private:
           map_pe->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
               .Size = newsize;
           //fix pe header
-          map_pe->OptionalHeader.SizeOfInitializedData -= export_size;
-          map_pe->OptionalHeader.SizeOfInitializedData += newsize;
+          // map_pe->OptionalHeader.SizeOfInitializedData -= export_size;
+          // map_pe->OptionalHeader.SizeOfInitializedData += newsize;
           return true;
         }
       }
@@ -237,8 +241,6 @@ private:
 
     if (export_table) {
       //save name & base
-      dllbase = export_table->Base;
-
       if (export_table->NumberOfFunctions) {
         //3 tables
         WORD *ordinal =
@@ -252,7 +254,7 @@ private:
 
           //convert to our format
           exp.ordinal = *ordinal;
-          exp.address = (flag & EXPORT_LOCAL) ? *function : 0;
+          exp.address = (flag == EXPORT_LOCAL) ? *function : 0;
           char *fname = (char *)rva2raw(map, *name);
           exp.name = string(fname);
 
@@ -273,11 +275,13 @@ private:
             exp.address = -1;
           }
 
+          //save to our list (### skip if already exists a export with same name ###)
+          export_list.push_back(exp);
+
+          //get next...
           ordinal++;
           name++;
           function++;
-
-          export_list.push_back(exp);
         }
       }
     }
@@ -303,7 +307,7 @@ private:
     PIMAGE_EXPORT_DIRECTORY export_table = (PIMAGE_EXPORT_DIRECTORY)ptr;
     memset(ptr, 0, sizeof(IMAGE_EXPORT_DIRECTORY));
     //copy name & base
-    export_table->Base = dllbase;
+    export_table->Base = 1;
     ptr += sizeof(IMAGE_EXPORT_DIRECTORY);
     rva += sizeof(IMAGE_EXPORT_DIRECTORY);
     export_table->Name = rva;
@@ -331,23 +335,31 @@ private:
     export_table->AddressOfNames = names_rva;
     export_table->AddressOfNameOrdinals = ordinals_rva;
     //for each entry in internal struct...
+    int ord = 0;
     for (auto it = begin(export_list); it != end(export_list); ++it) {
-      *functions_ptr = it->address;
-      *ordinals_ptr = it->ordinal;
       if (!(it->name).empty()) {
         if (it->type == EXPORT_FORWARD) {
           //forwarded? copy dllname and set api to it
-          strcpy(list_ptr, newdll);
           *functions_ptr = list_rva;
+          strcpy(list_ptr, newdll);
           list_ptr += strlen(newdll);
+          list_rva += strlen(newdll);
           *list_ptr++ = '.';
-          list_rva += strlen(newdll) + 1;
-          //and then copy name
-        }
-        if ((it->type == EXPORT_LOCAL) || (it->type == EXPORT_FORWARD)) {
-          //copy name (api already in place)
+          list_rva++;
           strcpy(list_ptr, (it->name).c_str());
+          list_ptr += (it->name).length() + 1;
+          list_rva += (it->name).length() + 1;
+          //and then copy name
           *names_ptr = list_rva;
+          strcpy(list_ptr, (it->name).c_str());
+          list_ptr += (it->name).length() + 1;
+          list_rva += (it->name).length() + 1;
+        }
+        if (it->type == EXPORT_LOCAL) {
+          *functions_ptr = it->address;
+          //copy name (api already in place)
+          *names_ptr = list_rva;
+          strcpy(list_ptr, (it->name).c_str());
           list_ptr += (it->name).length() + 1;
           list_rva += (it->name).length() + 1;
         }
@@ -368,7 +380,7 @@ private:
       //next item
       functions_ptr++;
       names_ptr++;
-      ordinals_ptr++;
+      *ordinals_ptr++ = ord++;
     }
   }
 
@@ -443,17 +455,19 @@ public:
     //process input exports
     process_export_table(input, EXPORT_FORWARD);
 
+    sort(export_list.begin(), export_list.end()); //sort the vector
+
     //calc new export size
     int export_size = sizeof(IMAGE_EXPORT_DIRECTORY);
-    export_size += strlen(dllname);
+    export_size += ALIGN(strlen(dllname) + 1, 4);
     export_size +=
         export_list.size() * (sizeof(DWORD) + sizeof(DWORD) + sizeof(WORD));
 
     PDL_INFO("! Exports found:\n")
     for (auto it = begin(export_list); it != end(export_list); ++it) {
-      export_size += (it->name).length();
-      if (it->type & EXPORT_FORWARD) {
-        export_size += strlen(newdll) + 1;
+      export_size += (it->name).length() + 1;
+      if (it->type == EXPORT_FORWARD) {
+        export_size += strlen(newdll) + 1 + (it->name).length() + 1;
       }
       PDL_INFO("0x%02x\t%s (0x%08x)\t%s\n", it->ordinal, (it->name).c_str(),
                it->address,
@@ -461,7 +475,7 @@ public:
                    ? "LOCAL"
                    : (it->type == EXPORT_FORWARD) ? "FORWARD" : "ALREADY");
     }
-    PDL_INFO("! New export info size: %d\n", export_size);
+    PDL_INFO("! New export section size: %d\n", export_size);
 
     //reuse export section
     PDL_INFO("! Patching export data...\n")
@@ -497,7 +511,6 @@ public:
     //fix checksum
     pe->OptionalHeader.CheckSum = calc_checksum(output, size);
 
-    //return size;
-    return 0;
+    return size;
   }
 } PDL;
