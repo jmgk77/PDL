@@ -11,10 +11,24 @@
 //
 // (c) jmgk 2022
 
-#include <cstdio>
-#include <unistd.h>
+//Usage:
+//  -i <target dll>
+//      this is the DLL we will hack
+//  -o <output file>
+//      the name of the file to write the proxy+target
+//  -m <proxy dll>
+//      the dll that will replace the target
+//  -d <new name of target dll>
+//      the name of the dll where we will put the original dll
+//  -s <new section name>
+//      the name of the new section we will create if original section dont have space [optional]
 
 #include "pdl.h"
+#include <cstdio>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <unistd.h>
 
 #define MAP_SIZE (16 * 1024 * 1024)
 
@@ -43,13 +57,12 @@ void discart_file_memory_map(void *ptr) { free(ptr); }
 
 void write_file_memory_map(char *file, void *ptr, int size) {
   FILE *fp1;
-  if ((fp1 = fopen(file, "wb")) != NULL) {
+  if ((fp1 = fopen(file, "wb+")) != NULL) {
     fwrite(ptr, 1, size, fp1);
     fclose(fp1);
   } else {
     printf("error in map fopen(wb)\n");
   }
-  free(ptr);
 }
 
 int main(int argc, char **argv) {
@@ -59,10 +72,12 @@ int main(int argc, char **argv) {
   char *input = NULL;
   char *output = NULL;
   char *malware = NULL;
+  char *dllname = NULL;
+  char *section = NULL;
 
   // parse command-line
   int c;
-  while ((c = getopt(argc, argv, "vi:o:m:")) != -1)
+  while ((c = getopt(argc, argv, "vi:o:m:d:s:")) != -1)
     switch (c) {
     case 'v':
       verbose = true;
@@ -76,11 +91,19 @@ int main(int argc, char **argv) {
     case 'm':
       malware = optarg;
       break;
+    case 'd':
+      dllname = optarg;
+      break;
+    case 's':
+      section = optarg;
+      break;
     }
 
   // check command-line
-  if ((input == NULL) || (output == NULL) || (malware == NULL)) {
-    printf("Usage: %s [-i input_dll] [-o output_dll] [-m malware_dll]\n",
+  if ((input == NULL) || (output == NULL) || (malware == NULL) ||
+      (dllname == NULL)) {
+    printf("Usage: %s -i <target dll> -o <output file> -m <proxy dll> -d <new "
+           "name of target dll> -s <new section name>\n",
            argv[0]);
     exit(EXIT_FAILURE);
   }
@@ -118,10 +141,20 @@ int main(int argc, char **argv) {
     exit(EXIT_FAILURE);
   }
 
+  //remove ".dll" from dllname
+  int sz = strlen(dllname);
+  if (sz > 4)
+    if (dllname[sz - 4] == '.')
+      if ((dllname[sz - 3] | 0x20) == 'd')
+        if ((dllname[sz - 2] | 0x20) == 'l')
+          if ((dllname[sz - 1] | 0x20) == 'l')
+            dllname[sz - 4] = 0;
+
   // process
-  int new_malware_size = PDL.proxify_dll(
-      malware_ptr, input_ptr, "DUMP.DLL", "XXXXXXXX", ".export",
-      (verbose ? PDL_FLAG_VERBOSE : 0) | PDL_FLAG_REUSE | PDL_FLAG_CREATE);
+  int new_malware_size =
+      PDL.proxify_dll(malware_ptr, input_ptr, input, dllname, section,
+                      (verbose ? PDL_FLAG_VERBOSE : 0) | PDL_FLAG_REUSE |
+                          ((section != NULL) ? PDL_FLAG_CREATE : 0));
 
   //check success
   if (new_malware_size == 0) {
