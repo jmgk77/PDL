@@ -50,9 +50,8 @@ struct export_list_item {
   WORD ordinal;
   DWORD address;
   string name;
-  bool operator<(const export_list_item &p) const {
-    return name < p.name; // order by name
-  }
+  bool operator<(const export_list_item &p) const { return name < p.name; }
+  bool operator==(const export_list_item &r) const { return name == r.name; }
 };
 
 class pdl {
@@ -275,8 +274,14 @@ private:
             exp.address = -1;
           }
 
-          //save to our list (### skip if already exists a export with same name ###)
-          export_list.push_back(exp);
+          //skip if already exists a export with same name (hook)
+          if (find(export_list.begin(), export_list.end(), exp) ==
+              export_list.end()) {
+            //save to our list
+            export_list.push_back(exp);
+          } else {
+            PDL_INFO("! %s already exists\n", fname)
+          }
 
           //get next...
           ordinal++;
