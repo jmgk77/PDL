@@ -9,7 +9,7 @@
 //   .JMML.    .JMML. .JMM. `"bmmd"'.MM:.  .:MMa..JMML..JMML.        .JMML.       .JMMmmmdP' .JMMmmmmMMM .JMMmmmmMMM
 //
 //
-// (c) jmgk 2022
+// Copyright 2022 jmgk distributed under GNU LGPL version 3 or any later version
 
 //Usage:
 //  -i <target dll>
@@ -66,7 +66,7 @@ void write_file_memory_map(char *file, void *ptr, int size) {
 }
 
 int main(int argc, char **argv) {
-  printf("Proxify DLL\nJMGK (c) 2022\n");
+  printf("Proxify DLL\n");
 
   bool verbose = false;
   char *input = NULL;

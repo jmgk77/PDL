@@ -9,7 +9,7 @@
 //     .JMML.    .JMMmmmdP' .JMMmmmmMMM
 //
 //
-// (c) jmgk 2022
+// Copyright 2022 jmgk distributed under GNU LGPL version 3 or any later version
 
 #pragma once
 
@@ -219,9 +219,7 @@ private:
               .VirtualAddress = section_table[section].VirtualAddress;
           map_pe->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT]
               .Size = newsize;
-          //fix pe header
-          // map_pe->OptionalHeader.SizeOfInitializedData -= export_size;
-          // map_pe->OptionalHeader.SizeOfInitializedData += newsize;
+              
           return true;
         }
       }
